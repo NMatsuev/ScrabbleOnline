@@ -1,0 +1,13 @@
+services:
+  - type: web
+    name: erudit-online
+    runtime: docker
+    plan: starter # диск (для сохранения игр между перезапусками) доступен на платных планах
+    healthCheckPath: /healthz
+    disk:
+      name: erudit-data
+      mountPath: /app/storage
+      sizeGB: 1
+    envVars:
+      - key: PORT
+        value: 3000

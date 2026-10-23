@@ -1,0 +1,14 @@
+{
+  "name": "erudit-online",
+  "version": "1.0.0",
+  "description": "Эрудит в реальном времени: WebSocket, чистый JavaScript, без фреймворков и внешних зависимостей",
+  "main": "server/index.js",
+  "scripts": {
+    "start": "node server/index.js",
+    "test": "node --test test/*.test.js",
+    "dict": "node tools/build-dictionary.js"
+  },
+  "engines": { "node": ">=18" },
+  "license": "MIT",
+  "private": true
+}
