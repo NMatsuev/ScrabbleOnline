@@ -35,14 +35,17 @@ class Hub {
     this.dirty = new Set();      // комнаты, ожидающие рассылки
     this.saveQueue = new Set();  // комнаты, ожидающие записи в БД
     this.saveTimer = null;
+    this.deleteQueue = new Set(); // комнаты, которые нужно удалить из БД
+    this.drainP = null;           // идущая сейчас запись в БД
   }
 
   /* ───────────────────────── запуск / остановка ───────────────────────── */
 
-  restore() {
+  /** Загружает комнаты из БД (хранилище может быть синхронным или сетевым, как Supabase). */
+  async restore() {
     const now = Date.now();
     let count = 0;
-    for (const room of this.store.loadRooms()) {
+    for (const room of await this.store.loadRooms()) {
       for (const p of room.players) p.lastSeenAt = now;
       this.rooms.set(room.code, room);
       this.engine.settle(room, now);  // догоняем время, пока сервер был выключен
@@ -53,11 +56,13 @@ class Hub {
     return count;
   }
 
-  shutdown() {
+  /** Мягкая остановка: дописываем в БД всё, что ещё не записано (но не дольше 6 секунд). */
+  async shutdown() {
     for (const t of this.timers.values()) clearTimeout(t);
     if (this.saveTimer) clearTimeout(this.saveTimer);
-    for (const room of this.rooms.values()) this.store.saveRoom(room);
-    this.store.close();
+    for (const room of this.rooms.values()) this.saveQueue.add(room.code);
+    await Promise.race([this.drainSaves(), new Promise((r) => setTimeout(r, 6000))]);
+    await this.store.close();
   }
 
   /* ───────────────────────── соединения ───────────────────────── */
@@ -181,6 +186,7 @@ class Hub {
         const room = this.rooms.get(code);
         if (!room) throw new GameError('no_room', 'Комната не найдена — проверьте код');
         let p = msg.token ? room.players.find((x) => x.token === msg.token) : null;
+        if (p && p.left) throw new GameError('bad_token', 'Вы вышли из этой игры и не можете вернуться');
         if (!p) {
           if (msg.token && room.status !== 'lobby' && !msg.name) throw new GameError('bad_token', 'Вас нет в этой игре');
           p = E.addPlayer(room, msg.name, now);   // бросит started/full/name_taken при необходимости
@@ -197,14 +203,9 @@ class Hub {
       case 'leave': {
         const room = client.room;
         if (!room) return null;
-        const pid = client.pid;
-        if (room.status === 'lobby') {
-          E.removePlayer(room, pid, now);
-          this.detach(client);
-          if (!room.players.length) this.deleteRoom(room);
-        } else {
-          this.detach(client);
-        }
+        E.leaveGame(room, client.pid, now);
+        this.detach(client);
+        if (room.status === 'lobby' && !room.players.length) this.deleteRoom(room);
         client.send({ t: 'left' });
         return null;
       }
@@ -259,7 +260,8 @@ class Hub {
     this.rooms.delete(room.code);
     this.live.delete(room.code);
     this.saveQueue.delete(room.code);
-    this.store.deleteRoom(room.code);
+    this.deleteQueue.add(room.code);
+    this.drainSaves();
   }
 
   /* ───────────────────────── последствия изменений ───────────────────────── */
@@ -297,8 +299,7 @@ class Hub {
     if (room.resultSaved) return;
     room.resultSaved = true;
     const res = this.engine.result(room);
-    try {
-      room.resultId = this.store.saveResult({
+    const payload = {
         code: room.code,
         mode: room.settings.mode,
         size: room.settings.size,
@@ -309,25 +310,57 @@ class Hub {
         winners: room.winnerIds.map((id) => room.players.find((p) => p.id === id).name),
         ranking: res.ranking,
         words: room.words,
+    };
+    // Запись может быть сетевой: не блокируем игру, а при ошибке повторим в housekeeping().
+    Promise.resolve()
+      .then(() => this.store.saveResult(payload))
+      .then((id) => { room.resultId = id; this.queueSave(room); })
+      .catch((e) => {
+        room.resultSaved = false;
+        this.log.error('[db] не удалось сохранить результат игры (повторим позже):', e.message);
       });
-    } catch (e) {
-      room.resultSaved = false;
-      this.log.error('[hub] не удалось сохранить результат', e);
-    }
-    this.store.saveRoom(room);
+    this.queueSave(room);
   }
 
   queueSave(room) {
     this.saveQueue.add(room.code);
-    if (this.saveTimer) return;
-    this.saveTimer = setTimeout(() => {
-      this.saveTimer = null;
-      for (const code of this.saveQueue) {
-        const r = this.rooms.get(code);
-        if (r) this.store.saveRoom(r);
-      }
+    if (this.saveTimer || this.drainP) return;
+    this.saveTimer = setTimeout(() => { this.saveTimer = null; this.drainSaves(); }, 300);
+  }
+
+  /**
+   * Записи в БД идут строго по очереди и склеиваются: если пока шла запись комната менялась снова,
+   * в БД уйдёт только самое свежее состояние. Ошибка (например, нет сети до Supabase) не теряет данные:
+   * комната остаётся в очереди и записывается повторно.
+   */
+  drainSaves() {
+    if (!this.drainP) {
+      this.drainP = this.drainLoop().finally(() => { this.drainP = null; });
+    }
+    return this.drainP;
+  }
+
+  async drainLoop() {
+    while (this.saveQueue.size || this.deleteQueue.size) {
+      let failed = false;
+      const codes = [...this.saveQueue];
       this.saveQueue.clear();
-    }, 300);
+      for (const code of codes) {
+        const room = this.rooms.get(code);
+        if (!room) continue;
+        try { await this.store.saveRoom(room); } catch (e) {
+          failed = true; this.saveQueue.add(code);
+          this.log.error('[db] не удалось сохранить комнату ' + code + ':', e.message);
+        }
+      }
+      for (const code of [...this.deleteQueue]) {
+        try { await this.store.deleteRoom(code); this.deleteQueue.delete(code); } catch (e) {
+          failed = true;
+          this.log.error('[db] не удалось удалить комнату ' + code + ':', e.message);
+        }
+      }
+      if (failed) await new Promise((r) => setTimeout(r, 2000));
+    }
   }
 
   /* ───────────────────────── обслуживание ───────────────────────── */
@@ -352,8 +385,9 @@ class Hub {
           this.engine.touch(room, now);
           this.afterChange(room, before, room);
         }
-      } else if (room.status === 'finished' && now - room.finishedAt > 2 * 3600_000 && !online) {
-        this.deleteRoom(room);
+      } else if (room.status === 'finished') {
+        if (!room.resultSaved) this.onFinished(room); // повтор, если запись результата не удалась
+        else if (now - room.finishedAt > 2 * 3600_000 && !online) this.deleteRoom(room);
       }
     }
   }

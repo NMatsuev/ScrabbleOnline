@@ -6,12 +6,11 @@
 const RULES = Object.freeze({
   rackSize: 7, // букв в стойке
   captureMs: 30_000, // максимум времени на сбор слова
-  cooldownMoveMs: 10_000, // пауза после слова / отмены / тайм-аута
+  cooldownMoveMs: 10_000, // пауза после отмены / тайм-аута
   cooldownExchangeMs: 15_000, // пауза после обмена букв
   bingoBonus: 15, // бонус, если за ход выложены все 7 букв стойки
   minPlayers: 2,
   maxPlayers: 4,
-  firstWordLen: 7, // длина автоматического первого слова
   minWordLen: 2,
 });
 
@@ -24,21 +23,24 @@ const MODES = Object.freeze({
     id: "fast",
     title: "Быстрая",
     size: 9,
-    baseTarget: 100,
+    firstWordLen: 5,
+    baseTarget: 50,
     timeLimitMin: 15,
   },
   normal: {
     id: "normal",
     title: "Обычная",
     size: 13,
-    baseTarget: 200,
+    firstWordLen: 7,
+    baseTarget: 100,
     timeLimitMin: 30,
   },
   long: {
     id: "long",
     title: "Долгая",
     size: 15,
-    baseTarget: 350,
+    firstWordLen: 9,
+    baseTarget: 180,
     timeLimitMin: 60,
   },
 });
@@ -47,7 +49,7 @@ const MODES = Object.freeze({
 function targetFor(modeId, players) {
   const m = MODES[modeId];
   const k = Math.min(RULES.maxPlayers, Math.max(RULES.minPlayers, players));
-  return Math.round((m.baseTarget * (1 - 0.1 * (k - 2))) / 10) * 10;
+  return Math.round((m.baseTarget * (1 - 0.1 * (k - 2))) / 5) * 5;
 }
 
 /** Классический набор фишек русского «Эрудита»: буква → [количество, очки]. Буквы «ё» нет: она играет как «е». */
@@ -153,18 +155,21 @@ function multipliers(code) {
 }
 
 /** Запасные слова на случай, если в словаре не нашлось подходящего первого слова. */
-const FALLBACK_STARTERS = [
-  "книга",
-  "слово",
-  "стена",
-  "ветер",
-  "земля",
-  "птица",
-  "кошка",
-  "гроза",
-  "лампа",
-  "река",
-];
+const FALLBACK_STARTERS = {
+  5: [
+    "книга",
+    "слово",
+    "стена",
+    "ветер",
+    "земля",
+    "птица",
+    "кошка",
+    "гроза",
+    "лампа",
+  ],
+  7: ["коробка", "корзина", "картина", "морковь", "пингвин"],
+  9: ["коробочка", "картофель", "морковина", "корзинщик", "пингвинка"],
+};
 
 module.exports = {
   RULES,

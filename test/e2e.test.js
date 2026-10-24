@@ -36,8 +36,8 @@ class TestClient {
   close() { try { this.ws.close(); } catch { /* */ } }
 }
 
-async function startApp(dataDir) {
-  const app = createServer({ dictPath: DICT, dataDir });
+async function startApp(dataDir, extra) {
+  const app = await createServer({ dictPath: DICT, dataDir, ...(extra || {}) });
   await new Promise((r) => app.server.listen(0, '127.0.0.1', r));
   return { app, url: `ws://127.0.0.1:${app.server.address().port}/ws`, http: `http://127.0.0.1:${app.server.address().port}` };
 }
@@ -129,6 +129,33 @@ test('HTTP: статика, конфигурация, health', async () => {
   assert.equal((await (await fetch(http + '/healthz')).json()).ok, true);
   assert.equal((await fetch(http + '/js/app.js')).status, 200);
   assert.equal((await fetch(http + '/nope')).status, 404);
+  await app.close();
+  fs.rmSync(dataDir, { recursive: true, force: true });
+});
+
+test('выход из комнаты: создатель уходит из лобби, вышедший из игры не может вернуться по токену', async () => {
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'erudit-'));
+  const { app, url } = await startApp(dataDir);
+  const a = await new TestClient(url).open();
+  await a.req('create', { name: 'Аня', mode: 'fast', maxPlayers: 4 });
+  const code = a.joined.room;
+  const b = await new TestClient(url).open();
+  await b.req('join', { room: code, name: 'Боря' });
+  const c = await new TestClient(url).open();
+  await c.req('join', { room: code, name: 'Вика' });
+  await b.until((g) => g.players.length === 3);
+  await a.req('leave');
+  await b.until((g) => g.players.length === 2 && g.hostId === b.joined.pid);
+  await b.req('start');
+  await c.until((g) => g.status === 'playing');
+  const tokenC = c.joined.token;
+  await c.req('leave');
+  await b.until((g) => g.players.find((p) => p.name === 'Вика').left);
+  assert.equal(b.state.status, 'finished'); // осталась одна не вышедшая — игра окончена
+  const c2 = await new TestClient(url).open();
+  assert.equal(await err(c2.req('join', { room: code, token: tokenC, name: 'Вика' })), 'bad_token');
+  assert.equal(app.store.listResults(5).length, 1, 'результат сохранён в БД');
+  [a, b, c, c2].forEach((x) => x.close());
   await app.close();
   fs.rmSync(dataDir, { recursive: true, force: true });
 });

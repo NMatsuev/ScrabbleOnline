@@ -29,12 +29,13 @@ const MIME = {
   '.webmanifest': 'application/manifest+json',
 };
 
-function createServer({ dictPath = DICT_PATH, dataDir = DATA_DIR } = {}) {
+async function createServer({ dictPath = DICT_PATH, dataDir = DATA_DIR, store: injected } = {}) {
   const dict = Dictionary.fromFile(dictPath);
-  const store = openStore(dataDir);
+  const store = injected || openStore(dataDir);
+  if (store.init) await store.init();
   const engine = new Engine(dict);
   const hub = new Hub({ engine, store });
-  const restored = hub.restore();
+  const restored = await hub.restore();
 
   const gzCache = new Map();
   const clients = new Set();
@@ -90,7 +91,10 @@ function createServer({ dictPath = DICT_PATH, dataDir = DATA_DIR } = {}) {
     }
     if (url.pathname === '/api/results') {
       const limit = Math.min(30, Math.max(1, Number(url.searchParams.get('limit')) || 8));
-      return sendJson(res, 200, store.listResults(limit));
+      Promise.resolve(store.listResults(limit))
+        .then((rows) => sendJson(res, 200, rows))
+        .catch((e) => { console.error('[db] /api/results:', e.message); sendJson(res, 200, []); });
+      return undefined;
     }
     return serveStatic(req, res, url.pathname);
   });
@@ -109,28 +113,30 @@ function createServer({ dictPath = DICT_PATH, dataDir = DATA_DIR } = {}) {
   const hkTimer = setInterval(() => hub.housekeeping(), 60_000);
   hbTimer.unref(); hkTimer.unref();
 
-  function close() {
+  async function close() {
     clearInterval(hbTimer); clearInterval(hkTimer);
     for (const c of clients) c.ws.terminate();
-    hub.shutdown();
-    return new Promise((resolve) => server.close(() => resolve()));
+    await hub.shutdown();
+    await new Promise((resolve) => server.close(() => resolve()));
   }
 
   return { server, hub, store, dict, close, restored };
 }
 
 if (require.main === module) {
-  const app = createServer();
-  app.server.listen(PORT, HOST, () => {
-    console.log(`Эрудит запущен: http://localhost:${PORT}`);
-    console.log(`Словарь: ${app.dict.size} слов, хранилище: ${app.store.kind} (${DATA_DIR}), восстановлено комнат: ${app.restored}`);
-    if (app.dict.size < 20000) {
-      console.log('Внимание: словарь небольшой. Полный словарь см. README (npm run dict).');
-    }
-  });
-  const stop = () => { app.close().then(() => process.exit(0)); setTimeout(() => process.exit(0), 3000).unref(); };
-  process.on('SIGTERM', stop);
-  process.on('SIGINT', stop);
+  createServer().then((app) => {
+    app.server.listen(PORT, HOST, () => {
+      console.log(`Эрудит запущен: http://localhost:${PORT}`);
+      const where = app.store.kind === 'supabase' ? 'Supabase' : `${app.store.kind} (${DATA_DIR})`;
+      console.log(`Словарь: ${app.dict.size} слов, хранилище: ${where}, восстановлено комнат: ${app.restored}`);
+      if (app.dict.size < 20000) {
+        console.log('Внимание: словарь небольшой (' + app.dict.size + ' слов). Положите полный словарь в data/dictionary.txt (UTF-8, одно слово в строке).');
+      }
+    });
+    const stop = () => { app.close().then(() => process.exit(0), () => process.exit(1)); setTimeout(() => process.exit(0), 10_000).unref(); };
+    process.on('SIGTERM', stop);
+    process.on('SIGINT', stop);
+  }).catch((e) => { console.error('Не удалось запустить сервер:', e.message); process.exit(1); });
 }
 
 module.exports = { createServer };

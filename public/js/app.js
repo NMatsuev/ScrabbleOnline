@@ -8,11 +8,11 @@ const PLABEL = { W: '3С', w: '2С', L: '3Б', l: '2Б', c: '★' };
 const LS = { session: 'erudit.session', name: 'erudit.name', last: 'erudit.last' };
 const FALLBACK_CFG = {
   modes: {
-    fast: { id: 'fast', title: 'Быстрая', size: 9, baseTarget: 100 },
-    normal: { id: 'normal', title: 'Обычная', size: 13, baseTarget: 200 },
-    long: { id: 'long', title: 'Долгая', size: 15, baseTarget: 350 },
+    fast: { id: 'fast', title: 'Быстрая', size: 9, firstWordLen: 3, baseTarget: 50 },
+    normal: { id: 'normal', title: 'Обычная', size: 13, firstWordLen: 5, baseTarget: 100 },
+    long: { id: 'long', title: 'Долгая', size: 15, firstWordLen: 7, baseTarget: 180 },
   },
-  targets: { fast: { 2: 100, 3: 90, 4: 80 }, normal: { 2: 200, 3: 180, 4: 160 }, long: { 2: 350, 3: 320, 4: 280 } },
+  targets: { fast: { 2: 50, 3: 45, 4: 40 }, normal: { 2: 100, 3: 90, 4: 80 }, long: { 2: 180, 3: 160, 4: 145 } },
   rules: { rackSize: 7, captureMs: 30000, cooldownMoveMs: 10000, cooldownExchangeMs: 15000, bingoBonus: 15, minPlayers: 2, maxPlayers: 4 },
   alphabet: [...'абвгдежзийклмнопрстуфхцчшщъыьэюя'],
 };
@@ -63,6 +63,7 @@ const S = {
     flash: new Map(),
     seen: null,
     hideResult: false,
+    confirmLeave: false,
   },
 };
 
@@ -103,7 +104,11 @@ const net = new Net({
   },
   onState(m) {
     S.offset = m.now - Date.now();
+    const prevHost = S.G && S.G.code === m.game.code ? S.G.hostId : null;
     S.G = m.game; S.you = m.you; S.stale = false;
+    if (prevHost && prevHost !== m.game.hostId && m.you && m.game.hostId === m.you.id && m.game.status === 'lobby') {
+      toast('Создатель вышел — теперь вы создатель комнаты', 'ok');
+    }
     S.ui.pend.clear();
     indexTiles();
     handleEvents();
@@ -128,7 +133,8 @@ function clearSession() {
   lsSet(LS.session, null); lsSet(LS.last, null);
   history.replaceState(null, '', location.pathname);
   S.entry.code = '';
-  Object.assign(S.ui, { mode: 'idle', selStart: null, cursor: null, exch: null, blank: null, hideResult: false, seen: null });
+  Object.assign(S.ui, { mode: 'idle', selStart: null, cursor: null, exch: null, blank: null, hideResult: false, seen: null, confirmLeave: false });
+  $('#modal').replaceChildren();
   S.ui.pend.clear();
   renderBanner();
 }
@@ -167,6 +173,7 @@ function eventText(e) {
     case 'word': return `${nm}: «${e.word.toUpperCase()}» +${e.score}${e.bingo ? ' (все 7 букв!)' : ''}`;
     case 'exchange': return `${nm} меняет буквы (${e.count})`;
     case 'timeout': return `У игрока ${nm} вышло время`;
+    case 'left': return `${nm} вышел из игры`;
     case 'end': return 'Игра окончена';
     default: return '';
   }
@@ -280,10 +287,10 @@ function buildEntry(root) {
   const rules = h('details', { class: 'panel rules' },
     h('summary', {}, 'Как играть'),
     h('ul', {},
-      h('li', {}, 'Первое слово появляется в центре доски само. Дальше все играют одновременно, по очереди ходить не нужно.'),
+      h('li', {}, 'Первое слово появляется в центре доски само (3, 5 или 7 букв — зависит от длительности). Дальше все играют одновременно, по очереди ходить не нужно.'),
       h('li', {}, `Нажмите «Собрать слово» и отметьте на доске первую и последнюю клетки отрезка. Отрезок обязан пройти хотя бы через одну букву, уже лежащую на доске. Клетки, которые заняли другие, выбрать нельзя.`),
       h('li', {}, `Поставьте буквы из стойки в пустые клетки (на телефоне — нажимайте буквы, на компьютере можно печатать с клавиатуры) и подтвердите. На всё есть ${R.captureMs / 1000} секунд, отменить сбор можно в любой момент.`),
-      h('li', {}, `После слова или отмены нужно подождать ${R.cooldownMoveMs / 1000} секунд. Обмен букв доступен вне сбора слова и даёт паузу ${R.cooldownExchangeMs / 1000} секунд.`),
+      h('li', {}, `После удачного слова паузы нет. Если вы отменили сбор или время вышло, нужно подождать ${R.cooldownMoveMs / 1000} секунд. Обмен букв доступен вне сбора слова и даёт паузу ${R.cooldownExchangeMs / 1000} секунд.`),
       h('li', {}, 'Слово должно быть в словаре (существительное в именительном падеже). Буквы, соседние с вашими, тоже образуют слова — они тоже проверяются и приносят очки.'),
       h('li', {}, `Бланк (✦) — любая буква, но 0 очков. Если выложить все ${R.rackSize} букв стойки сразу, бонус +${R.bingoBonus}.`),
       h('li', {}, 'Игра идёт до заданного числа очков; кто набрал первым — победил. Если время игры вышло или кончились буквы, побеждает лидер.'),
@@ -377,7 +384,8 @@ function buildGame(root, key) {
   els.bag = h('div', { class: 'chip' });
   els.clock = h('div', { class: 'chip', title: 'Общее время игры' });
   els.code = h('button', { class: 'chip', type: 'button', title: 'Скопировать ссылку на комнату', onClick: copyLink }, 'Комната ', h('b', {}, G.code));
-  els.top = h('header', { class: 'top' }, h('div', { class: 'brand' }, 'Эрудит'), els.goal, els.bag, els.clock, h('div', { class: 'spacer' }), els.code);
+  els.leave = h('button', { class: 'chip', type: 'button', onClick: askLeave }, 'Выйти из игры');
+  els.top = h('header', { class: 'top' }, h('div', { class: 'brand' }, 'Эрудит'), els.goal, els.bag, els.clock, h('div', { class: 'spacer' }), els.leave, els.code);
 
   els.players = h('section', { class: 'players', 'aria-label': 'Игроки' });
 
@@ -458,6 +466,7 @@ function renderClock() {
 
 function playerStatus(p) {
   const G = S.G;
+  if (p.left) return 'вышел из игры';
   if (G.status === 'finished') return '';
   if (!p.connected) return 'не в сети';
   if (p.capture) return `собирает слово, ${secs(p.capture.deadline - nowMs())} с`;
@@ -749,6 +758,15 @@ function commit() {
 }
 function cancelCapture() { S.ui.pend.clear(); S.ui.cursor = null; req('cancel').catch(() => {}); }
 
+function askLeave() {
+  if (S.G && S.G.status === 'playing') { S.ui.confirmLeave = true; renderModal(); } else doLeave();
+}
+function doLeave() {
+  const finished = !!S.G && S.G.status === 'finished';
+  S.ui.confirmLeave = false;
+  req('leave').catch(() => { if (finished) { clearSession(); render(); } });
+}
+
 function openExchange() { S.ui.exch = new Set(); S.els.rack._sig = null; renderRack(); renderControls(); }
 function closeExchange() { S.ui.exch = null; S.els.rack._sig = null; renderRack(); renderControls(); }
 function doExchange() {
@@ -762,7 +780,8 @@ document.addEventListener('keydown', (e) => {
   if (e.ctrlKey || e.metaKey || e.altKey) return;
   const me = getMe(); const ui = S.ui;
   if (e.key === 'Escape') {
-    if (ui.blank) { ui.blank = null; renderModal(); }
+    if (ui.confirmLeave) { ui.confirmLeave = false; renderModal(); }
+    else if (ui.blank) { ui.blank = null; renderModal(); }
     else if (ui.exch) closeExchange();
     else if (me && me.capture) cancelCapture();
     else if (ui.mode === 'selecting') stopSelecting();
@@ -787,10 +806,21 @@ const REASONS = {
   time: 'Время игры вышло',
   out_of_tiles: 'Буквы в мешке и у игрока закончились',
   abandoned: 'Игра заброшена',
+  last_player: 'Остальные игроки вышли из игры',
 };
 
 function renderModal() {
   const box = $('#modal'); const { ui, G } = S;
+  if (ui.confirmLeave) {
+    box.replaceChildren(h('div', { class: 'overlay', role: 'dialog', 'aria-modal': 'true', 'aria-label': 'Выход из игры', onClick: (e) => { if (e.target.classList.contains('overlay')) { ui.confirmLeave = false; renderModal(); } } },
+      h('div', { class: 'dialog' },
+        h('h2', {}, 'Выйти из игры?'),
+        h('p', { style: 'margin:0' }, 'Вернуться в эту партию будет нельзя: ваш отрезок освободится, а буквы вернутся в мешок. Набранные очки останутся в итогах.'),
+        h('div', { class: 'row' },
+          h('button', { class: 'btn danger', type: 'button', onClick: doLeave }, 'Выйти'),
+          h('button', { class: 'btn ghost', type: 'button', onClick: () => { ui.confirmLeave = false; renderModal(); } }, 'Остаться')))));
+    return;
+  }
   if (ui.blank) {
     const letters = S.cfg.alphabet.map((l) => h('button', { type: 'button', onClick: () => { const cb = ui.blank.cb; ui.blank = null; renderModal(); cb(l); } }, l.toUpperCase()));
     box.replaceChildren(h('div', { class: 'overlay', role: 'dialog', 'aria-modal': 'true', 'aria-label': 'Выбор буквы для бланка', onClick: (e) => { if (e.target.classList.contains('overlay')) { ui.blank = null; renderModal(); } } },
@@ -805,7 +835,7 @@ function renderModal() {
     const winners = r.winnerIds.map((id) => (playerById(id) || {}).name).filter(Boolean);
     const rows = r.ranking.map((p) => h('tr', { style: `--pc:${COLORS[p.color % COLORS.length]}` },
       h('td', { class: 'num' }, p.place),
-      h('td', {}, h('span', { class: 'pn' }), p.name),
+      h('td', {}, h('span', { class: 'pn' }), p.name, p.left ? ' (вышел)' : ''),
       h('td', { class: 'num' }, h('b', {}, p.score)),
       h('td', { class: 'num' }, p.words),
       h('td', {}, p.best ? `${p.best.word.toUpperCase()} (${p.best.score})` : '—'),
@@ -822,7 +852,7 @@ function renderModal() {
           h('thead', {}, h('tr', {}, ['№', 'Игрок', 'Очки', 'Слов', 'Лучшее слово', 'Самое длинное', 'Среднее', 'Бонусов', 'Обменов', 'Отказов'].map((t) => h('th', {}, t)))),
           h('tbody', {}, rows))),
         h('div', { class: 'row' },
-          h('button', { class: 'btn', type: 'button', onClick: () => { clearSession(); render(); } }, 'Новая игра'),
+          h('button', { class: 'btn', type: 'button', onClick: doLeave }, 'Выйти и начать новую'),
           h('button', { class: 'btn ghost', type: 'button', onClick: () => { ui.hideResult = true; renderModal(); } }, 'Смотреть доску')))));
     return;
   }

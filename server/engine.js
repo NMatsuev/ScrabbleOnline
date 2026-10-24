@@ -124,6 +124,36 @@ class Engine {
     this.touch(room, now);
   }
 
+  /**
+   * Выход из комнаты. В лобби место просто освобождается. Во время игры игрок выбывает навсегда:
+   * его отрезок освобождается, буквы возвращаются в мешок, очки остаются в итогах.
+   * Если не вышедших игроков осталось меньше двух, игра заканчивается.
+   */
+  leaveGame(room, pid, now) {
+    if (room.status === 'lobby') { this.removePlayer(room, pid, now); return; }
+    if (room.status !== 'playing') return;
+    this.settle(room, now);
+    if (room.status !== 'playing') return;
+    const p = room.players.find((x) => x.id === pid);
+    if (!p || p.left) return;
+    this.releaseCapture(p);
+    for (const t of p.rack) {
+      if (t.blank) t.ch = '?';
+      room.bag.splice(Math.floor(this.rng() * (room.bag.length + 1)), 0, t);
+    }
+    p.rack = [];
+    p.left = true;
+    p.cooldownUntil = 0;
+    this.addEvent(room, 'left', { pid }, now);
+    if (room.hostId === pid) {
+      const next = room.players.find((x) => !x.left);
+      if (next) room.hostId = next.id;
+    }
+    const active = room.players.filter((x) => !x.left);
+    if (active.length < R.minPlayers) this.finish(room, active.length ? 'last_player' : 'abandoned', now);
+    this.touch(room, now);
+  }
+
   kick(room, hostPid, targetPid, now) {
     if (room.hostId !== hostPid) fail('not_host', 'Только создатель комнаты может удалять игроков');
     if (targetPid === hostPid) fail('bad_request', 'Нельзя удалить себя');
@@ -161,7 +191,7 @@ class Engine {
   /** Первое слово по центру: случайное, фиксированной длины, буквы берутся из общего мешка. */
   placeFirstWord(room) {
     const n = room.settings.size;
-    const L = R.firstWordLen;
+    const L = C.MODES[room.settings.mode].firstWordLen;
     const y = (n - 1) / 2;
     const x0 = (n - L) / 2;
     const available = new Map();
@@ -175,7 +205,10 @@ class Engine {
       for (const ch of w) need.set(ch, (need.get(ch) || 0) + 1);
       if ([...need].every(([ch, k]) => (available.get(ch) || 0) >= k + 1)) word = w;
     }
-    if (!word) word = C.FALLBACK_STARTERS[Math.floor(this.rng() * C.FALLBACK_STARTERS.length)];
+    if (!word) {
+      const list = C.FALLBACK_STARTERS[L] || C.FALLBACK_STARTERS[5];
+      word = list[Math.floor(this.rng() * list.length)];
+    }
 
     [...word].forEach((ch, i) => {
       const idx = room.bag.findIndex((t) => !t.blank && t.ch === ch);
@@ -226,8 +259,11 @@ class Engine {
     room.status = 'finished';
     room.finishedAt = now;
     room.endReason = reason;
-    const max = Math.max(...room.players.map((p) => p.score));
-    room.winnerIds = room.players.filter((p) => p.score === max).map((p) => p.id);
+    // Вышедшие игроки не претендуют на победу (если остался хотя бы один не вышедший).
+    const active = room.players.filter((p) => !p.left);
+    const pool = active.length ? active : room.players;
+    const max = Math.max(...pool.map((p) => p.score));
+    room.winnerIds = pool.filter((p) => p.score === max).map((p) => p.id);
     this.addEvent(room, 'end', { reason, winnerIds: room.winnerIds }, now);
   }
 
@@ -237,6 +273,7 @@ class Engine {
     if (room.status !== 'playing') fail('not_playing', room.status === 'finished' ? 'Игра уже завершена' : 'Игра ещё не началась');
     const p = room.players.find((x) => x.id === pid);
     if (!p) fail('no_player', 'Вас нет в этой игре');
+    if (p.left) fail('left', 'Вы вышли из этой игры');
     return p;
   }
 
@@ -462,8 +499,9 @@ class Engine {
     if (!p.stats.best || ev.score > p.stats.best.score) p.stats.best = { word: ev.word, score: ev.score };
     if (ev.word.length > p.stats.longest.length) p.stats.longest = ev.word;
     this.refill(room, p);
-    p.cooldownUntil = now + R.cooldownMoveMs;
-    p.cooldownKind = 'move';
+    // После удачного слова пауза не нужна: можно сразу занимать следующий отрезок.
+    p.cooldownUntil = 0;
+    p.cooldownKind = '';
 
     room.words.push({ n: room.words.length + 1, pid: p.id, word: ev.word, score: ev.score, at: now, bingo: ev.bingo, parts: ev.parts });
     this.addEvent(room, 'word', { pid: p.id, word: ev.word, score: ev.score, bingo: ev.bingo, cells: placedCells }, now);
@@ -514,7 +552,7 @@ class Engine {
 
   result(room) {
     const ranking = room.players
-      .map((p) => ({ id: p.id, name: p.name, color: p.color, score: p.score, ...this.publicStats(p) }))
+      .map((p) => ({ id: p.id, name: p.name, color: p.color, score: p.score, left: !!p.left, ...this.publicStats(p) }))
       .sort((a, b) => b.score - a.score);
     for (const r of ranking) r.place = 1 + ranking.filter((o) => o.score > r.score).length;
     return {
@@ -561,6 +599,7 @@ class Engine {
         color: p.color,
         score: p.score,
         connected: isConnected(p.id),
+        left: !!p.left,
         tilesInHand: p.rack.length + (p.capture ? Object.keys(p.capture.placed).length : 0),
         cooldownUntil: p.cooldownUntil > now ? p.cooldownUntil : 0,
         cooldownKind: p.cooldownKind,
