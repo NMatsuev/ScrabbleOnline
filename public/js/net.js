@@ -7,7 +7,14 @@
  *  - heartbeat (ping/pong) обнаруживает «тихо умершие» соединения, которые браузер сам не заметит.
  */
 export class Net {
-  constructor({ getSession, onStatus, onJoined, onState, onLeft, onResumeFailed }) {
+  constructor({
+    getSession,
+    onStatus,
+    onJoined,
+    onState,
+    onLeft,
+    onResumeFailed,
+  }) {
     this.getSession = getSession;
     this.onStatus = onStatus;
     this.onJoined = onJoined;
@@ -23,14 +30,17 @@ export class Net {
     this.pongTimer = null;
   }
 
-  get open() { return !!this.ws && this.ws.readyState === 1; }
+  get open() {
+    return !!this.ws && this.ws.readyState === 1;
+  }
 
   start() {
-    window.addEventListener('online', () => this.reconnectNow());
-    window.addEventListener('offline', () => this.dead());
-    document.addEventListener('visibilitychange', () => {
-      if (document.visibilityState !== 'visible') return;
-      if (this.open) this.beat(); else this.reconnectNow();
+    window.addEventListener("online", () => this.reconnectNow());
+    window.addEventListener("offline", () => this.dead());
+    document.addEventListener("visibilitychange", () => {
+      if (document.visibilityState !== "visible") return;
+      if (this.open) this.beat();
+      else this.reconnectNow();
     });
     this.connect();
   }
@@ -38,10 +48,12 @@ export class Net {
   connect() {
     if (this.ws && this.ws.readyState <= 1) return;
     clearTimeout(this.retryTimer);
-    this.onStatus('connecting', this.attempt);
+    this.onStatus("connecting", this.attempt);
     let ws;
     try {
-      ws = new WebSocket(`${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws`);
+      ws = new WebSocket(
+        `${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/ws`,
+      );
     } catch {
       this.scheduleRetry();
       return;
@@ -50,11 +62,15 @@ export class Net {
     ws.onopen = () => {
       if (this.ws !== ws) return;
       this.attempt = 0;
-      this.onStatus('online', 0);
+      this.onStatus("online", 0);
       this.startBeat();
       const s = this.getSession();
       if (s) {
-        this.request('join', { room: s.room, token: s.token, name: s.name }).catch((err) => {
+        this.request("join", {
+          room: s.room,
+          token: s.token,
+          name: s.name,
+        }).catch((err) => {
           if (!err.network) this.onResumeFailed(err);
         });
       }
@@ -62,27 +78,45 @@ export class Net {
     ws.onmessage = (e) => {
       if (this.ws !== ws) return;
       let m;
-      try { m = JSON.parse(e.data); } catch { return; }
+      try {
+        m = JSON.parse(e.data);
+      } catch {
+        return;
+      }
       this.onMessage(m);
     };
-    ws.onclose = () => { if (this.ws === ws) this.lost(); };
-    ws.onerror = () => { /* onclose последует сам */ };
+    ws.onclose = () => {
+      if (this.ws === ws) this.lost();
+    };
+    ws.onerror = () => {
+      /* onclose последует сам */
+    };
   }
 
   onMessage(m) {
     switch (m.t) {
-      case 'ack': {
+      case "ack": {
         const p = this.pending.get(m.id);
         if (!p) return;
         this.pending.delete(m.id);
         clearTimeout(p.timer);
-        if (m.ok) p.resolve(m.data); else p.reject(Object.assign(new Error(m.error || 'Ошибка'), { code: m.code }));
+        if (m.ok) p.resolve(m.data);
+        else
+          p.reject(
+            Object.assign(new Error(m.error || "Ошибка"), { code: m.code }),
+          );
         return;
       }
-      case 'state': this.onState(m); return;
-      case 'joined': this.onJoined(m); return;
-      case 'left': this.onLeft(m); return;
-      case 'pong':
+      case "state":
+        this.onState(m);
+        return;
+      case "joined":
+        this.onJoined(m);
+        return;
+      case "left":
+        this.onLeft(m);
+        return;
+      case "pong":
         clearTimeout(this.pongTimer);
         return;
       default:
@@ -92,13 +126,19 @@ export class Net {
   request(t, payload = {}) {
     return new Promise((resolve, reject) => {
       if (!this.open) {
-        reject(Object.assign(new Error('Нет соединения с сервером'), { network: true }));
+        reject(
+          Object.assign(new Error("Нет соединения с сервером"), {
+            network: true,
+          }),
+        );
         return;
       }
       const id = this.nextId++;
       const timer = setTimeout(() => {
         this.pending.delete(id);
-        reject(Object.assign(new Error('Сервер не ответил'), { network: true }));
+        reject(
+          Object.assign(new Error("Сервер не ответил"), { network: true }),
+        );
       }, 10_000);
       this.pending.set(id, { resolve, reject, timer });
       this.ws.send(JSON.stringify({ t, id, ...payload }));
@@ -121,14 +161,22 @@ export class Net {
     if (!this.open) return;
     clearTimeout(this.pongTimer);
     this.pongTimer = setTimeout(() => this.dead(), 5000);
-    try { this.ws.send(JSON.stringify({ t: 'ping', ts: Date.now() })); } catch { this.dead(); }
+    try {
+      this.ws.send(JSON.stringify({ t: "ping", ts: Date.now() }));
+    } catch {
+      this.dead();
+    }
   }
 
   dead() {
     const ws = this.ws;
     if (!ws) return;
     ws.onclose = null;
-    try { ws.close(); } catch { /* уже закрыт */ }
+    try {
+      ws.close();
+    } catch {
+      /* уже закрыт */
+    }
     this.lost();
   }
 
@@ -137,10 +185,12 @@ export class Net {
     this.ws = null;
     for (const [, p] of this.pending) {
       clearTimeout(p.timer);
-      p.reject(Object.assign(new Error('Соединение потеряно'), { network: true }));
+      p.reject(
+        Object.assign(new Error("Соединение потеряно"), { network: true }),
+      );
     }
     this.pending.clear();
-    this.onStatus('offline', this.attempt);
+    this.onStatus("offline", this.attempt);
     this.scheduleRetry();
   }
 
@@ -152,7 +202,10 @@ export class Net {
   }
 
   reconnectNow() {
-    if (this.open) { this.beat(); return; }
+    if (this.open) {
+      this.beat();
+      return;
+    }
     clearTimeout(this.retryTimer);
     this.attempt = 0;
     this.connect();

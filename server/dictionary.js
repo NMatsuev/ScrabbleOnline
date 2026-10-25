@@ -1,10 +1,10 @@
-'use strict';
-const fs = require('fs');
-const C = require('./config');
+"use strict";
+const fs = require("fs");
+const C = require("./config");
 
 /** Приводим слово к виду, в котором хранятся фишки: строчные, «ё» → «е». */
 function normalize(word) {
-  return String(word).trim().toLowerCase().replace(/ё/g, 'е');
+  return String(word).trim().toLowerCase().replace(/ё/g, "е");
 }
 
 class Dictionary {
@@ -18,18 +18,22 @@ class Dictionary {
   }
 
   static fromFile(file) {
-    const text = fs.readFileSync(file, 'utf8');
+    const text = fs.readFileSync(file, "utf8");
     const words = [];
     for (const line of text.split(/\r?\n/)) {
       const token = line.trim().split(/\s+/)[0];
-      if (token && !token.startsWith('#')) words.push(token);
+      if (token && !token.startsWith("#")) words.push(token);
     }
     return new Dictionary(words);
   }
 
-  get size() { return this.set.size; }
+  get size() {
+    return this.set.size;
+  }
 
-  has(word) { return this.set.has(word); }
+  has(word) {
+    return this.set.has(word);
+  }
 
   /** Случайное слово заданной длины из «лёгких» букв — для автоматического первого слова. */
   randomStarter(len, rng = Math.random) {
@@ -41,7 +45,10 @@ class Dictionary {
         let ok = true;
         for (const ch of w) {
           const t = C.TILE_SET[ch];
-          if (!t || t[1] > 3 || ch === 'ъ') { ok = false; break; }
+          if (!t || t[1] > 3 || ch === "ъ") {
+            ok = false;
+            break;
+          }
         }
         if (ok) list.push(w);
       }

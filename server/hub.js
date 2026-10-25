@@ -1,4 +1,4 @@
-'use strict';
+"use strict";
 /**
  * Hub связывает сеть, движок и хранилище:
  *  - принимает команды клиентов и применяет их к комнатам;
@@ -6,10 +6,10 @@
  *  - держит таймеры (истечение захватов и общего времени);
  *  - сохраняет комнаты в БД и восстанавливает их после перезапуска.
  */
-const { GameError } = require('./engine');
-const C = require('./config');
+const { GameError } = require("./engine");
+const C = require("./config");
 
-const CODE_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+const CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
 const MAX_MSGS_PER_SEC = 60;
 
 class Client {
@@ -21,7 +21,9 @@ class Client {
     this.windowStart = Date.now();
     this.count = 0;
   }
-  send(obj) { this.ws.send(JSON.stringify(obj)); }
+  send(obj) {
+    this.ws.send(JSON.stringify(obj));
+  }
 }
 
 class Hub {
@@ -29,14 +31,14 @@ class Hub {
     this.engine = engine;
     this.store = store;
     this.log = log;
-    this.rooms = new Map();      // code → room
-    this.live = new Map();       // code → Set<Client>
-    this.timers = new Map();     // code → Timeout
-    this.dirty = new Set();      // комнаты, ожидающие рассылки
-    this.saveQueue = new Set();  // комнаты, ожидающие записи в БД
+    this.rooms = new Map(); // code → room
+    this.live = new Map(); // code → Set<Client>
+    this.timers = new Map(); // code → Timeout
+    this.dirty = new Set(); // комнаты, ожидающие рассылки
+    this.saveQueue = new Set(); // комнаты, ожидающие записи в БД
     this.saveTimer = null;
     this.deleteQueue = new Set(); // комнаты, которые нужно удалить из БД
-    this.drainP = null;           // идущая сейчас запись в БД
+    this.drainP = null; // идущая сейчас запись в БД
   }
 
   /* ───────────────────────── запуск / остановка ───────────────────────── */
@@ -48,9 +50,9 @@ class Hub {
     for (const room of await this.store.loadRooms()) {
       for (const p of room.players) p.lastSeenAt = now;
       this.rooms.set(room.code, room);
-      this.engine.settle(room, now);  // догоняем время, пока сервер был выключен
+      this.engine.settle(room, now); // догоняем время, пока сервер был выключен
       this.schedule(room);
-      if (room.status === 'finished') this.onFinished(room);
+      if (room.status === "finished") this.onFinished(room);
       count++;
     }
     return count;
@@ -61,7 +63,10 @@ class Hub {
     for (const t of this.timers.values()) clearTimeout(t);
     if (this.saveTimer) clearTimeout(this.saveTimer);
     for (const room of this.rooms.values()) this.saveQueue.add(room.code);
-    await Promise.race([this.drainSaves(), new Promise((r) => setTimeout(r, 6000))]);
+    await Promise.race([
+      this.drainSaves(),
+      new Promise((r) => setTimeout(r, 6000)),
+    ]);
     await this.store.close();
   }
 
@@ -69,9 +74,11 @@ class Hub {
 
   addClient(ws) {
     const client = new Client(ws);
-    ws.on('message', (raw) => this.onMessage(client, raw));
-    ws.on('pong', () => { client.alive = true; });
-    ws.on('close', () => this.detach(client));
+    ws.on("message", (raw) => this.onMessage(client, raw));
+    ws.on("pong", () => {
+      client.alive = true;
+    });
+    ws.on("close", () => this.detach(client));
     return client;
   }
 
@@ -96,7 +103,10 @@ class Hub {
     const room = client.room;
     if (!room) return;
     const set = this.live.get(room.code);
-    if (set) { set.delete(client); if (!set.size) this.live.delete(room.code); }
+    if (set) {
+      set.delete(client);
+      if (!set.size) this.live.delete(room.code);
+    }
     const p = room.players.find((x) => x.id === client.pid);
     if (p) p.lastSeenAt = Date.now();
     client.room = null;
@@ -118,9 +128,16 @@ class Hub {
     const set = this.live.get(room.code);
     if (!set || !set.size) return;
     const now = Date.now();
-    const common = this.engine.commonView(room, now, (pid) => this.isConnected(room.code, pid));
+    const common = this.engine.commonView(room, now, (pid) =>
+      this.isConnected(room.code, pid),
+    );
     for (const c of set) {
-      c.send({ t: 'state', now, game: common, you: this.engine.youView(room, c.pid) });
+      c.send({
+        t: "state",
+        now,
+        game: common,
+        you: this.engine.youView(room, c.pid),
+      });
     }
   }
 
@@ -129,8 +146,11 @@ class Hub {
     if (!room) return;
     const now = Date.now();
     client.send({
-      t: 'state', now,
-      game: this.engine.commonView(room, now, (pid) => this.isConnected(room.code, pid)),
+      t: "state",
+      now,
+      game: this.engine.commonView(room, now, (pid) =>
+        this.isConnected(room.code, pid),
+      ),
       you: this.engine.youView(room, client.pid),
     });
   }
@@ -140,16 +160,31 @@ class Hub {
   onMessage(client, raw) {
     client.alive = true;
     const nowMs = Date.now();
-    if (nowMs - client.windowStart > 1000) { client.windowStart = nowMs; client.count = 0; }
-    if (++client.count > MAX_MSGS_PER_SEC) { client.ws.close(1008); return; }
+    if (nowMs - client.windowStart > 1000) {
+      client.windowStart = nowMs;
+      client.count = 0;
+    }
+    if (++client.count > MAX_MSGS_PER_SEC) {
+      client.ws.close(1008);
+      return;
+    }
 
     let msg;
-    try { msg = JSON.parse(raw); } catch { return; }
-    if (!msg || typeof msg !== 'object' || typeof msg.t !== 'string') return;
+    try {
+      msg = JSON.parse(raw);
+    } catch {
+      return;
+    }
+    if (!msg || typeof msg !== "object" || typeof msg.t !== "string") return;
 
-    if (msg.t === 'ping') { client.send({ t: 'pong', ts: msg.ts, now: nowMs }); return; }
+    if (msg.t === "ping") {
+      client.send({ t: "pong", ts: msg.ts, now: nowMs });
+      return;
+    }
 
-    const ack = (ok, extra) => { if (msg.id != null) client.send({ t: 'ack', id: msg.id, ok, ...extra }); };
+    const ack = (ok, extra) => {
+      if (msg.id != null) client.send({ t: "ack", id: msg.id, ok, ...extra });
+    };
     const roomBefore = client.room;
     const revBefore = roomBefore ? roomBefore.rev : 0;
 
@@ -164,8 +199,8 @@ class Hub {
         // Клиент мог действовать по устаревшим данным — присылаем ему свежее состояние.
         if (client.room) this.sendState(client);
       } else {
-        this.log.error('[hub] ошибка обработки', msg.t, e);
-        ack(false, { code: 'internal', error: 'Внутренняя ошибка сервера' });
+        this.log.error("[hub] ошибка обработки", msg.t, e);
+        ack(false, { code: "internal", error: "Внутренняя ошибка сервера" });
       }
     }
   }
@@ -173,40 +208,63 @@ class Hub {
   dispatch(client, msg, now) {
     const E = this.engine;
     switch (msg.t) {
-      case 'create': {
+      case "create": {
         const room = this.createRoom(msg, now);
         const p = E.addPlayer(room, msg.name, now);
         this.attach(client, room, p);
-        client.send({ t: 'joined', room: room.code, token: p.token, pid: p.id, name: p.name });
+        client.send({
+          t: "joined",
+          room: room.code,
+          token: p.token,
+          pid: p.id,
+          name: p.name,
+        });
         this.queueSave(room);
         return null;
       }
-      case 'join': {
-        const code = String(msg.room || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+      case "join": {
+        const code = String(msg.room || "")
+          .toUpperCase()
+          .replace(/[^A-Z0-9]/g, "");
         const room = this.rooms.get(code);
-        if (!room) throw new GameError('no_room', 'Комната не найдена — проверьте код');
-        let p = msg.token ? room.players.find((x) => x.token === msg.token) : null;
-        if (p && p.left) throw new GameError('bad_token', 'Вы вышли из этой игры и не можете вернуться');
+        if (!room)
+          throw new GameError("no_room", "Комната не найдена — проверьте код");
+        let p = msg.token
+          ? room.players.find((x) => x.token === msg.token)
+          : null;
+        if (p && p.left)
+          throw new GameError(
+            "bad_token",
+            "Вы вышли из этой игры и не можете вернуться",
+          );
         if (!p) {
-          if (msg.token && room.status !== 'lobby' && !msg.name) throw new GameError('bad_token', 'Вас нет в этой игре');
-          p = E.addPlayer(room, msg.name, now);   // бросит started/full/name_taken при необходимости
+          if (msg.token && room.status !== "lobby" && !msg.name)
+            throw new GameError("bad_token", "Вас нет в этой игре");
+          p = E.addPlayer(room, msg.name, now); // бросит started/full/name_taken при необходимости
           this.queueSave(room);
         }
         this.attach(client, room, p);
-        client.send({ t: 'joined', room: room.code, token: p.token, pid: p.id, name: p.name });
+        client.send({
+          t: "joined",
+          room: room.code,
+          token: p.token,
+          pid: p.id,
+          name: p.name,
+        });
         this.markDirty(room);
         return null;
       }
-      case 'sync':
+      case "sync":
         if (client.room) this.sendState(client);
         return null;
-      case 'leave': {
+      case "leave": {
         const room = client.room;
         if (!room) return null;
         E.leaveGame(room, client.pid, now);
         this.detach(client);
-        if (room.status === 'lobby' && !room.players.length) this.deleteRoom(room);
-        client.send({ t: 'left' });
+        if (room.status === "lobby" && !room.players.length)
+          this.deleteRoom(room);
+        client.send({ t: "left" });
         return null;
       }
       default:
@@ -214,29 +272,66 @@ class Hub {
     }
 
     const room = client.room;
-    if (!room) throw new GameError('no_room', 'Вы не в комнате');
+    if (!room) throw new GameError("no_room", "Вы не в комнате");
     const pid = client.pid;
     switch (msg.t) {
-      case 'start': E.startGame(room, pid, now); this.schedule(room); return null;
-      case 'kick': E.kick(room, pid, String(msg.target || ''), now); this.kickClients(room, String(msg.target || '')); return null;
-      case 'capture': { E.beginCapture(room, pid, msg, now); this.schedule(room); return null; }
-      case 'place': E.place(room, pid, { tileId: msg.tileId, x: msg.x, y: msg.y, letter: msg.letter }, now); return null;
-      case 'unplace': E.unplace(room, pid, { x: msg.x, y: msg.y }, now); return null;
-      case 'blank': E.setBlank(room, pid, { x: msg.x, y: msg.y, letter: msg.letter }, now); return null;
-      case 'cancel': E.cancel(room, pid, now); this.schedule(room); return null;
-      case 'commit': { const r = E.commit(room, pid, now); this.schedule(room); return r; }
-      case 'exchange': E.exchange(room, pid, msg.tileIds, now); return null;
+      case "start":
+        E.startGame(room, pid, now);
+        this.schedule(room);
+        return null;
+      case "kick":
+        E.kick(room, pid, String(msg.target || ""), now);
+        this.kickClients(room, String(msg.target || ""));
+        return null;
+      case "capture": {
+        E.beginCapture(room, pid, msg, now);
+        this.schedule(room);
+        return null;
+      }
+      case "place":
+        E.place(
+          room,
+          pid,
+          { tileId: msg.tileId, x: msg.x, y: msg.y, letter: msg.letter },
+          now,
+        );
+        return null;
+      case "unplace":
+        E.unplace(room, pid, { x: msg.x, y: msg.y }, now);
+        return null;
+      case "blank":
+        E.setBlank(room, pid, { x: msg.x, y: msg.y, letter: msg.letter }, now);
+        return null;
+      case "cancel":
+        E.cancel(room, pid, now);
+        this.schedule(room);
+        return null;
+      case "commit": {
+        const r = E.commit(room, pid, now);
+        this.schedule(room);
+        return r;
+      }
+      case "exchange":
+        E.exchange(room, pid, msg.tileIds, now);
+        return null;
       default:
-        throw new GameError('bad_request', 'Неизвестная команда');
+        throw new GameError("bad_request", "Неизвестная команда");
     }
   }
 
   createRoom(msg, now) {
     let code;
     do {
-      code = Array.from({ length: 5 }, () => CODE_ALPHABET[Math.floor(Math.random() * CODE_ALPHABET.length)]).join('');
+      code = Array.from(
+        { length: 5 },
+        () => CODE_ALPHABET[Math.floor(Math.random() * CODE_ALPHABET.length)],
+      ).join("");
     } while (this.rooms.has(code));
-    const room = this.engine.newRoom(code, { mode: msg.mode, maxPlayers: msg.maxPlayers }, now);
+    const room = this.engine.newRoom(
+      code,
+      { mode: msg.mode, maxPlayers: msg.maxPlayers },
+      now,
+    );
     this.rooms.set(code, room);
     return room;
   }
@@ -246,9 +341,10 @@ class Hub {
     if (!set) return;
     for (const c of [...set]) {
       if (c.pid === pid) {
-        c.room = null; c.pid = null;
+        c.room = null;
+        c.pid = null;
         set.delete(c);
-        c.send({ t: 'left', reason: 'kicked' });
+        c.send({ t: "left", reason: "kicked" });
       }
     }
   }
@@ -272,7 +368,7 @@ class Hub {
       this.markDirty(room);
       this.queueSave(room);
       this.schedule(room);
-      if (room.status === 'finished') this.onFinished(room);
+      if (room.status === "finished") this.onFinished(room);
     }
   }
 
@@ -281,9 +377,10 @@ class Hub {
     const old = this.timers.get(room.code);
     if (old) clearTimeout(old);
     this.timers.delete(room.code);
-    if (room.status !== 'playing') return;
+    if (room.status !== "playing") return;
     let next = room.endsAt;
-    for (const p of room.players) if (p.capture) next = Math.min(next, p.capture.deadline);
+    for (const p of room.players)
+      if (p.capture) next = Math.min(next, p.capture.deadline);
     const delay = Math.min(Math.max(0, next - Date.now()) + 15, 2 ** 31 - 1);
     const t = setTimeout(() => {
       this.timers.delete(room.code);
@@ -300,24 +397,32 @@ class Hub {
     room.resultSaved = true;
     const res = this.engine.result(room);
     const payload = {
-        code: room.code,
-        mode: room.settings.mode,
-        size: room.settings.size,
-        target: room.settings.target,
-        startedAt: room.startedAt,
-        finishedAt: room.finishedAt,
-        reason: room.endReason,
-        winners: room.winnerIds.map((id) => room.players.find((p) => p.id === id).name),
-        ranking: res.ranking,
-        words: room.words,
+      code: room.code,
+      mode: room.settings.mode,
+      size: room.settings.size,
+      target: room.settings.target,
+      startedAt: room.startedAt,
+      finishedAt: room.finishedAt,
+      reason: room.endReason,
+      winners: room.winnerIds.map(
+        (id) => room.players.find((p) => p.id === id).name,
+      ),
+      ranking: res.ranking,
+      words: room.words,
     };
     // Запись может быть сетевой: не блокируем игру, а при ошибке повторим в housekeeping().
     Promise.resolve()
       .then(() => this.store.saveResult(payload))
-      .then((id) => { room.resultId = id; this.queueSave(room); })
+      .then((id) => {
+        room.resultId = id;
+        this.queueSave(room);
+      })
       .catch((e) => {
         room.resultSaved = false;
-        this.log.error('[db] не удалось сохранить результат игры (повторим позже):', e.message);
+        this.log.error(
+          "[db] не удалось сохранить результат игры (повторим позже):",
+          e.message,
+        );
       });
     this.queueSave(room);
   }
@@ -325,7 +430,10 @@ class Hub {
   queueSave(room) {
     this.saveQueue.add(room.code);
     if (this.saveTimer || this.drainP) return;
-    this.saveTimer = setTimeout(() => { this.saveTimer = null; this.drainSaves(); }, 300);
+    this.saveTimer = setTimeout(() => {
+      this.saveTimer = null;
+      this.drainSaves();
+    }, 300);
   }
 
   /**
@@ -335,7 +443,9 @@ class Hub {
    */
   drainSaves() {
     if (!this.drainP) {
-      this.drainP = this.drainLoop().finally(() => { this.drainP = null; });
+      this.drainP = this.drainLoop().finally(() => {
+        this.drainP = null;
+      });
     }
     return this.drainP;
   }
@@ -348,15 +458,27 @@ class Hub {
       for (const code of codes) {
         const room = this.rooms.get(code);
         if (!room) continue;
-        try { await this.store.saveRoom(room); } catch (e) {
-          failed = true; this.saveQueue.add(code);
-          this.log.error('[db] не удалось сохранить комнату ' + code + ':', e.message);
+        try {
+          await this.store.saveRoom(room);
+        } catch (e) {
+          failed = true;
+          this.saveQueue.add(code);
+          this.log.error(
+            "[db] не удалось сохранить комнату " + code + ":",
+            e.message,
+          );
         }
       }
       for (const code of [...this.deleteQueue]) {
-        try { await this.store.deleteRoom(code); this.deleteQueue.delete(code); } catch (e) {
+        try {
+          await this.store.deleteRoom(code);
+          this.deleteQueue.delete(code);
+        } catch (e) {
           failed = true;
-          this.log.error('[db] не удалось удалить комнату ' + code + ':', e.message);
+          this.log.error(
+            "[db] не удалось удалить комнату " + code + ":",
+            e.message,
+          );
         }
       }
       if (failed) await new Promise((r) => setTimeout(r, 2000));
@@ -370,24 +492,33 @@ class Hub {
     const now = Date.now();
     for (const room of [...this.rooms.values()]) {
       const online = (this.live.get(room.code) || new Set()).size > 0;
-      if (room.status === 'lobby') {
+      if (room.status === "lobby") {
         for (const p of [...room.players]) {
-          if (!this.isConnected(room.code, p.id) && now - p.lastSeenAt > 5 * 60_000) {
+          if (
+            !this.isConnected(room.code, p.id) &&
+            now - p.lastSeenAt > 5 * 60_000
+          ) {
             this.engine.removePlayer(room, p.id, now);
             this.afterChange(room, -1, room);
           }
         }
-        if (!room.players.length || (!online && now - room.updatedAt > 6 * 3600_000)) this.deleteRoom(room);
-      } else if (room.status === 'playing') {
+        if (
+          !room.players.length ||
+          (!online && now - room.updatedAt > 6 * 3600_000)
+        )
+          this.deleteRoom(room);
+      } else if (room.status === "playing") {
         if (!online && now - room.updatedAt > 12 * 3600_000) {
           const before = room.rev;
-          this.engine.finish(room, 'abandoned', now);
+          this.engine.finish(room, "abandoned", now);
           this.engine.touch(room, now);
           this.afterChange(room, before, room);
         }
-      } else if (room.status === 'finished') {
-        if (!room.resultSaved) this.onFinished(room); // повтор, если запись результата не удалась
-        else if (now - room.finishedAt > 2 * 3600_000 && !online) this.deleteRoom(room);
+      } else if (room.status === "finished") {
+        if (!room.resultSaved)
+          this.onFinished(room); // повтор, если запись результата не удалась
+        else if (now - room.finishedAt > 2 * 3600_000 && !online)
+          this.deleteRoom(room);
       }
     }
   }
@@ -395,7 +526,10 @@ class Hub {
   /** Рассылка ping и отключение «мёртвых» соединений. */
   heartbeat(clients) {
     for (const c of clients) {
-      if (!c.alive) { c.ws.terminate(); continue; }
+      if (!c.alive) {
+        c.ws.terminate();
+        continue;
+      }
       c.alive = false;
       c.ws.ping();
     }

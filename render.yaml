@@ -1,9 +1,6 @@
-# Render Blueprint: https://render.com → New → Blueprint → выберите репозиторий.
-# Состояние игр хранится в Supabase, поэтому постоянный диск Render не нужен и подходит бесплатный план.
-# SUPABASE_URL и SUPABASE_SERVICE_KEY Render спросит при создании (sync: false) — в репозиторий их класть нельзя.
 services:
   - type: web
-    name: erudit-online
+    name: scrabble-online
     runtime: docker
     plan: free
     healthCheckPath: /healthz

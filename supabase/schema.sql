@@ -1,5 +1,3 @@
--- Выполните один раз в Supabase: Dashboard → SQL Editor → New query → Run.
-
 create table if not exists public.rooms (
   code        text   primary key,
   data        jsonb  not null,          -- полное состояние комнаты (доска, мешок, стойки, таймеры)
